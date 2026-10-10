@@ -1,0 +1,31 @@
+{
+  "model_name": "Hybrid Stacking Super Learner (RandomForest + HistGradientBoosting + LogisticRegression)",
+  "model_type": "StackingClassifier",
+  "disease_target": "Type 2 Diabetes Mellitus",
+  "dataset_rows": 96146,
+  "features_count": 13,
+  "features": [
+    "age",
+    "hypertension",
+    "heart_disease",
+    "bmi",
+    "HbA1c_level",
+    "blood_glucose_level",
+    "gender_Male",
+    "gender_Other",
+    "smoking_history_current",
+    "smoking_history_ever",
+    "smoking_history_former",
+    "smoking_history_never",
+    "smoking_history_not current"
+  ],
+  "metrics": {
+    "accuracy": 0.9698387935517421,
+    "recall": 0.7205188679245284,
+    "precision": 0.9201807228915663,
+    "f1_score": 0.8082010582010583,
+    "roc_auc": 0.9752362189578844
+  },
+  "training_time_seconds": 9.091751337051392,
+  "scikit_learn_version": "1.6.0"
+}
