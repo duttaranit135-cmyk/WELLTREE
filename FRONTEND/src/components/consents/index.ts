@@ -1,0 +1,2 @@
+// Consents components export
+export {};
