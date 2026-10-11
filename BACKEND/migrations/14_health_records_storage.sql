@@ -32,11 +32,15 @@ ON CONFLICT (id) DO UPDATE
         allowed_mime_types = ARRAY['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
 
 -- ============================================================
--- 2. Drop old permissive storage policies (from migration 08)
+-- 2. Drop old policies (ensures idempotency if re-run)
 -- ============================================================
 DROP POLICY IF EXISTS "Authorized users can read medical report files"   ON storage.objects;
 DROP POLICY IF EXISTS "Authorized users can upload medical report files" ON storage.objects;
 DROP POLICY IF EXISTS "Authorized users can delete medical report files" ON storage.objects;
+
+DROP POLICY IF EXISTS "health_records_select" ON storage.objects;
+DROP POLICY IF EXISTS "health_records_insert" ON storage.objects;
+DROP POLICY IF EXISTS "health_records_delete" ON storage.objects;
 
 -- ============================================================
 -- 3. Tighter storage RLS: authenticated role only, no anon access

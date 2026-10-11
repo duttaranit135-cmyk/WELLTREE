@@ -32,6 +32,10 @@ api.interceptors.request.use(
       console.warn('[API] Failed to retrieve session for request authentication:', error);
       return Promise.reject(error);
     }
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+      delete config.headers['Content-Type'];
+    }
+
     return config;
   },
   (error) => Promise.reject(error)

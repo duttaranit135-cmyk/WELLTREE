@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Activity, Plus, Heart, AlertTriangle, User, Users, Stethoscope, Calendar, Trash2, Edit3 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Activity, Plus, Heart, AlertTriangle, User, Users, Stethoscope, Calendar, Trash2, Edit3, FileText } from 'lucide-react';
 import { useFamily } from '../context/FamilyContext';
 import { useAuth } from '../hooks/useAuth';
 import { healthService } from '../lib/services/healthService';
@@ -287,6 +288,13 @@ export const HealthRecordsPage: React.FC = () => {
               </div>
             </div>
           )}
+
+          <Link to="/medical-reports">
+            <Button variant="outline" className="flex items-center gap-2 border-teal-200 text-teal-700 hover:bg-teal-50">
+              <FileText className="w-4 h-4" />
+              <span>Upload Documents / Reports</span>
+            </Button>
+          </Link>
 
           <Button onClick={handleOpenCreate} className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white shadow-sm">
             <Plus className="w-4 h-4" />

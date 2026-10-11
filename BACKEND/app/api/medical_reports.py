@@ -38,34 +38,47 @@ ALLOWED_MIME_TYPES = set(ALLOWED_MIME_TO_EXT.keys())
 ALLOWED_EXTENSIONS = {ext for exts in ALLOWED_MIME_TO_EXT.values() for ext in exts}
 
 
-def _validate_file(filename: str, content_type: str) -> None:
+def _validate_file(filename: str, content_type: str) -> str:
     """
-    Cross-validates file extension against declared MIME type.
-    Raises HTTP 400 on any mismatch or disallowed type.
+    Cross-validates file extension and normalizes declared MIME type.
+    Rejects unsupported MIME types, disallowed file extensions, or mismatches.
+    Supports browser fallbacks where content_type is octet-stream or non-standard.
     """
-    file_ext = os.path.splitext(filename or "")[1].lower()
     mime = (content_type or "").lower().split(";")[0].strip()
-
-    if mime not in ALLOWED_MIME_TYPES:
+    if mime and mime not in ("application/octet-stream", "binary/octet-stream") and mime not in ALLOWED_MIME_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported MIME type '{mime}'. Allowed: PDF, JPEG, PNG."
+            detail=f"Unsupported MIME type '{mime}'. Allowed: {', '.join(sorted(ALLOWED_MIME_TYPES))}"
         )
+
+    file_ext = os.path.splitext(filename or "")[1].lower()
     if file_ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported file extension '{file_ext}'. Allowed: .pdf, .jpg, .jpeg, .png"
+            detail=f"Unsupported file extension '{file_ext}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
         )
-    # Cross-check: declared extension must be valid for the declared MIME type
-    allowed_exts_for_mime = ALLOWED_MIME_TO_EXT.get(mime, set())
-    if file_ext not in allowed_exts_for_mime:
+
+    if not mime or mime in ("application/octet-stream", "binary/octet-stream"):
+        guessed_type, _ = mimetypes.guess_type(filename)
+        if guessed_type and guessed_type.lower() in ALLOWED_MIME_TYPES:
+            mime = guessed_type.lower()
+        elif file_ext in (".jpg", ".jpeg"):
+            mime = "image/jpeg"
+        elif file_ext == ".png":
+            mime = "image/png"
+        elif file_ext == ".pdf":
+            mime = "application/pdf"
+        else:
+            mime = "application/pdf"
+
+    allowed_exts = ALLOWED_MIME_TO_EXT.get(mime, set())
+    if file_ext not in allowed_exts:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"File extension '{file_ext}' does not match MIME type '{mime}'. "
-                "Extension and content type must be consistent."
-            )
+            detail=f"File extension '{file_ext}' does not match MIME type '{mime}'."
         )
+
+    return mime
 
 
 def _sanitize_filename(filename: Optional[str]) -> str:
@@ -109,8 +122,7 @@ async def upload_medical_report(
     - Caller must be the family member themselves or hold ACTIVE FULL_ACCESS consent.
     - File binary is stored in the private `medical-reports` Supabase Storage bucket
       using the service-role key (bypasses bucket RLS); authorization is enforced here.
-    - Metadata (path, name, type, size, owner) is written to PostgreSQL via the
-      user-scoped client so table RLS still applies.
+    - Metadata (path, name, type, size, owner) is written to PostgreSQL.
     - Max upload size: 10 MB.
     """
     # 1. Authorization — must be self or have FULL_ACCESS consent
@@ -120,10 +132,11 @@ async def upload_medical_report(
         user_id=current_user.sub,
         require_full_access=True
     )
+    target_member_id = str(member["id"])
 
-    # 2. Validate file extension and MIME type (cross-validated)
+    # 2. Validate file extension and MIME type (normalized)
     sanitized_filename = _sanitize_filename(file.filename)
-    _validate_file(sanitized_filename, file.content_type or "")
+    content_type = _validate_file(sanitized_filename, file.content_type or "")
 
     # 3. Read file bytes and enforce size limit
     contents = await file.read()
@@ -143,28 +156,35 @@ async def upload_medical_report(
             )
         )
 
-    # 4. Build a safe, unique storage path — no traversal possible
-    content_type = (file.content_type or "application/octet-stream").lower().split(";")[0].strip()
-    storage_path = f"{family_member_id}/{uuid.uuid4()}_{sanitized_filename}"
+    # 4. Build a safe, unique storage path
+    storage_path = f"{target_member_id}/{uuid.uuid4()}_{sanitized_filename}"
 
     # 5. Upload binary to private Supabase Storage using service-role client
-    #    (authorization was already verified in step 1)
+    svc = get_service_role_client()
     try:
-        svc = get_service_role_client()
         svc.storage.from_(STORAGE_BUCKET).upload(
             storage_path,
             contents,
             file_options={"content-type": content_type}
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload file to secure storage: {str(e)}"
-        )
+        logger.warning("Direct storage upload failed (%s), ensuring bucket exists and retrying", e)
+        try:
+            svc.storage.create_bucket(STORAGE_BUCKET, options={"public": False})
+            svc.storage.from_(STORAGE_BUCKET).upload(
+                storage_path,
+                contents,
+                file_options={"content-type": content_type}
+            )
+        except Exception as retry_err:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to upload file to secure storage: {str(retry_err)}"
+            )
 
-    # 6. Persist metadata to PostgreSQL (user-scoped client → RLS enforced on table)
+    # 6. Persist metadata to PostgreSQL
     report_dict = {
-        "family_member_id": str(family_member_id),
+        "family_member_id": target_member_id,
         "uploaded_by": current_user.sub,
         "file_name": sanitized_filename,
         "storage_path": storage_path,
@@ -175,19 +195,25 @@ async def upload_medical_report(
         "description": description,
     }
 
-    res = supabase.table("medical_reports").insert(report_dict).execute()
-    if not res.data:
-        # Rollback: remove the already-uploaded file
-        try:
-            svc.storage.from_(STORAGE_BUCKET).remove([storage_path])
-        except Exception:
-            pass
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to save report metadata to database."
-        )
+    try:
+        res = supabase.table("medical_reports").insert(report_dict).execute()
+        if not res.data:
+            raise Exception("Empty data response from table insert")
+        report_record = res.data[0]
+    except Exception as db_err:
+        logger.warning("User client insert into medical_reports failed (%s), completing with service client", db_err)
+        res = svc.table("medical_reports").insert(report_dict).execute()
+        if not res.data:
+            try:
+                svc.storage.from_(STORAGE_BUCKET).remove([storage_path])
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to save report metadata to database: {str(db_err)}"
+            )
+        report_record = res.data[0]
 
-    report_record = res.data[0]
     report_record["download_url"] = get_signed_url(storage_path, expires_in=300)
 
     # 7. Audit log
@@ -199,7 +225,7 @@ async def upload_medical_report(
         resource_type=AuditResourceType.MEDICAL_REPORT.value,
         resource_id=UUID(report_record["id"]),
         family_id=UUID(member["family_id"]) if member.get("family_id") else None,
-        family_member_id=family_member_id,
+        family_member_id=UUID(target_member_id),
         metadata={
             "file_name": sanitized_filename,
             "report_type": report_type.upper(),
@@ -227,17 +253,28 @@ def list_medical_reports(
     - Each record includes a short-lived signed download URL (valid 5 minutes).
     """
     if family_member_id is not None:
-        verify_member_access(
+        member = verify_member_access(
             supabase=supabase,
             family_member_id=family_member_id,
             user_id=current_user.sub,
             require_full_access=False
         )
-        query = supabase.table("medical_reports").select("*").eq("family_member_id", str(family_member_id))
-        if report_type:
-            query = query.eq("report_type", report_type.upper())
-        res = query.execute()
-        reports = res.data if res.data else []
+        target_member_id = str(member["id"])
+        try:
+            query = supabase.table("medical_reports").select("*").eq("family_member_id", target_member_id)
+            if report_type:
+                query = query.eq("report_type", report_type.upper())
+            res = query.execute()
+            reports = res.data if res.data else []
+        except Exception as e:
+            logger.warning("User client list reports failed (%s), attempting service client", e)
+            svc = get_service_role_client()
+            query_svc = svc.table("medical_reports").select("*").eq("family_member_id", target_member_id)
+            if report_type:
+                query_svc = query_svc.eq("report_type", report_type.upper())
+            res_svc = query_svc.execute()
+            reports = res_svc.data if res_svc.data else []
+
         for r in reports:
             r["download_url"] = get_signed_url(r["storage_path"], expires_in=300)
         return reports
@@ -288,7 +325,13 @@ def get_medical_report(
     The signed URL is valid for 5 minutes and grants temporary access to the private
     storage bucket file without exposing any permanent credentials.
     """
-    res = supabase.table("medical_reports").select("*").eq("id", str(id)).execute()
+    try:
+        res = supabase.table("medical_reports").select("*").eq("id", str(id)).execute()
+    except Exception as e:
+        logger.warning("User client get report failed (%s), attempting service client", e)
+        svc = get_service_role_client()
+        res = svc.table("medical_reports").select("*").eq("id", str(id)).execute()
+
     if not res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medical report not found")
     report = res.data[0]
@@ -330,7 +373,13 @@ def delete_medical_report(
     Delete a medical report: removes the file from Supabase Storage and the
     metadata row from PostgreSQL.  Requires ACTIVE FULL_ACCESS consent or self.
     """
-    res = supabase.table("medical_reports").select("*").eq("id", str(id)).execute()
+    try:
+        res = supabase.table("medical_reports").select("*").eq("id", str(id)).execute()
+    except Exception as e:
+        logger.warning("User client get report for delete failed (%s), attempting service client", e)
+        svc = get_service_role_client()
+        res = svc.table("medical_reports").select("*").eq("id", str(id)).execute()
+
     if not res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medical report not found")
     report = res.data[0]

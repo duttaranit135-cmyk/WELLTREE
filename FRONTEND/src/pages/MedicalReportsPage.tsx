@@ -51,6 +51,22 @@ export const MedicalReportsPage: React.FC = () => {
     }
   };
 
+  const resolveMemberId = (targetId?: string): string => {
+    if (targetId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetId)) {
+      return targetId;
+    }
+    if (targetId?.startsWith('mem-')) {
+      const stripped = targetId.slice(4);
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(stripped)) {
+        return stripped;
+      }
+    }
+    if (activeMember?.user_id && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(activeMember.user_id)) {
+      return activeMember.user_id;
+    }
+    return user?.id || '';
+  };
+
   const fetchReports = async () => {
     if (!memberId) {
       setReports([]);
@@ -59,11 +75,16 @@ export const MedicalReportsPage: React.FC = () => {
     }
     try {
       setIsLoading(true);
-      const data = await medicalReportService.getReports(memberId);
+      const validMemberId = resolveMemberId(memberId);
+      const data = await medicalReportService.getReports(validMemberId);
       setReports(data || []);
     } catch (err: any) {
       console.warn('Failed to load reports:', err);
-      toast.error('Failed to load reports');
+      if (err?.response?.status === 404) {
+        setReports([]);
+      } else {
+        toast.error(err?.response?.data?.detail || 'Failed to load reports');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -89,8 +110,13 @@ export const MedicalReportsPage: React.FC = () => {
   };
 
   const validateAndSetFile = (file: File) => {
-    const validTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
-    if (!validTypes.includes(file.type)) {
+    const name = (file.name || '').toLowerCase();
+    const validExtensions = ['.pdf', '.jpg', '.jpeg', '.png'];
+    const hasValidExt = validExtensions.some((ext) => name.endsWith(ext));
+    const validMimes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg', 'image/pjpeg', 'image/x-png'];
+    const hasValidMime = validMimes.includes((file.type || '').toLowerCase());
+
+    if (!hasValidExt && !hasValidMime) {
       toast.error('Only PDF, JPG, and PNG files are supported');
       return;
     }
@@ -107,8 +133,10 @@ export const MedicalReportsPage: React.FC = () => {
       toast.error('Please select a file to upload');
       return;
     }
-    if (!memberId) {
-      toast.error('Please pick an active family member');
+
+    const validId = resolveMemberId(memberId);
+    if (!validId) {
+      toast.error('Please pick an active family member or log in first');
       return;
     }
 
@@ -116,7 +144,7 @@ export const MedicalReportsPage: React.FC = () => {
       setIsUploading(true);
       const formData = new FormData();
       formData.append('file', selectedFile);
-      formData.append('family_member_id', memberId);
+      formData.append('family_member_id', validId);
       formData.append('report_type', reportType);
       if (reportDate) formData.append('report_date', reportDate);
       if (description) formData.append('description', description);
@@ -128,7 +156,7 @@ export const MedicalReportsPage: React.FC = () => {
       setDescription('');
       fetchReports();
     } catch (err: any) {
-      toast.error(err.message || 'Upload failed');
+      toast.error(err?.response?.data?.detail || err.message || 'Upload failed');
     } finally {
       setIsUploading(false);
     }
@@ -398,10 +426,11 @@ export const MedicalReportsPage: React.FC = () => {
                 onChange={(e) => setReportType(e.target.value)}
               >
                 <option value="LAB_REPORT">Lab Test / Blood Work</option>
-                <option value="IMAGING">Imaging (X-Ray, MRI, CT)</option>
+                <option value="IMAGING_SCAN">Imaging (X-Ray, MRI, CT, Ultrasound)</option>
                 <option value="PRESCRIPTION">Prescription</option>
                 <option value="DISCHARGE_SUMMARY">Discharge Summary</option>
                 <option value="GENERAL">General Clinical Note</option>
+                <option value="OTHER">Other Document</option>
               </select>
             </div>
 

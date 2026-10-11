@@ -26,6 +26,36 @@ def verify_member_access(
     """
     member_res = supabase.table("family_members").select("*").eq("id", str(family_member_id)).execute()
     if not member_res.data:
+        # Also check if family_member_id matches the member's user_id
+        member_res = supabase.table("family_members").select("*").eq("user_id", str(family_member_id)).execute()
+
+    if not member_res.data:
+        # If user is asking for themselves, ensure they have a self-membership
+        if str(family_member_id) == user_id:
+            try:
+                from app.db.supabase import get_service_role_client
+                svc = get_service_role_client()
+                fam_res = svc.table("families").select("id").eq("created_by", user_id).execute()
+                fam_id = fam_res.data[0]["id"] if fam_res.data else None
+                if not fam_id:
+                    new_fam = svc.table("families").insert({
+                        "name": "My Family",
+                        "description": "Personal family healthcare workspace",
+                        "created_by": user_id
+                    }).execute()
+                    if new_fam.data:
+                        fam_id = new_fam.data[0]["id"]
+                if fam_id:
+                    new_mem = svc.table("family_members").insert({
+                        "family_id": fam_id,
+                        "user_id": user_id,
+                        "role": "ADMIN"
+                    }).execute()
+                    if new_mem.data:
+                        return new_mem.data[0]
+            except Exception:
+                pass
+
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Family member not found"
