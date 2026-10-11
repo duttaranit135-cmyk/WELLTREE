@@ -98,6 +98,69 @@ export const FamiliesPage: React.FC = () => {
     }
   };
 
+  // Helper to determine accurate member count for a family card
+  const getFamilyMemberCount = (fam: Family): number => {
+    const idSet = new Set<string>();
+
+    // 1. Add members from server payload if present
+    if (fam.members && fam.members.length > 0) {
+      fam.members.forEach((m) => {
+        const id = m.id || m.user_id;
+        const name = (m.name || m.member_name || m.user_name || '').toLowerCase();
+        if (
+          id &&
+          !id.startsWith('e1000') &&
+          !id.startsWith('e2000') &&
+          !id.startsWith('e3000') &&
+          !name.includes('sarah') &&
+          !name.includes('aarav') &&
+          !name.includes('kavita')
+        ) {
+          idSet.add(id);
+        }
+      });
+    }
+
+    // 2. Add members stored in localStorage for this family (added via "Add Member")
+    try {
+      const local = localStorage.getItem(`wt_family_members_${fam.id}`);
+      if (local) {
+        const list = JSON.parse(local);
+        if (Array.isArray(list)) {
+          list.forEach((m: any) => {
+            const id = m.id || m.user_id;
+            const name = (m.name || m.member_name || m.user_name || '').toLowerCase();
+            if (
+              id &&
+              !id.startsWith('e1000') &&
+              !id.startsWith('e2000') &&
+              !id.startsWith('e3000') &&
+              !name.includes('sarah') &&
+              !name.includes('aarav') &&
+              !name.includes('kavita')
+            ) {
+              idSet.add(id);
+            }
+          });
+        }
+      }
+    } catch {}
+
+    // 3. Subtract removed members
+    try {
+      const removed = localStorage.getItem(`wt_family_removed_${fam.id}`);
+      if (removed) {
+        const removedIds: string[] = JSON.parse(removed);
+        if (Array.isArray(removedIds)) {
+          removedIds.forEach((rid) => idSet.delete(rid));
+        }
+      }
+    } catch {}
+
+    // A family always has at least 1 member (the creator/admin)
+    return idSet.size > 0 ? idSet.size : 1;
+  };
+
   return (
     <div className="space-y-8 animate-fade-in">
       {/* Page Header */}
@@ -176,7 +239,7 @@ export const FamiliesPage: React.FC = () => {
           {families.map((family) => {
             const role = getUserRole(family);
             const badgeVariant = getRoleBadgeVariant(role);
-            const memberCount = family.members?.length ?? 1;
+            const memberCount = getFamilyMemberCount(family);
 
             return (
               <Card
@@ -208,8 +271,8 @@ export const FamiliesPage: React.FC = () => {
 
                 {/* Card Footer: Metadata */}
                 <div className="pt-5 mt-5 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                  <div className="flex items-center gap-1.5">
-                    <Users className="w-3.5 h-3.5 text-slate-400" />
+                  <div className="flex items-center gap-1.5 font-medium text-slate-700">
+                    <Users className="w-4 h-4 text-primary" />
                     <span>
                       {memberCount} {memberCount === 1 ? 'member' : 'members'}
                     </span>

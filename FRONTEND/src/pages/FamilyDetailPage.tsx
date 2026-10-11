@@ -85,7 +85,19 @@ export const FamilyDetailPage: React.FC = () => {
     if (!familyId) return [];
     try {
       const saved = localStorage.getItem(`wt_family_members_${familyId}`);
-      return saved ? JSON.parse(saved) : [];
+      if (!saved) return [];
+      const parsed: FamilyMember[] = JSON.parse(saved);
+      return parsed.filter((m) => {
+        const name = (m.name || m.member_name || m.user_name || '').toLowerCase();
+        return (
+          !name.includes('sarah') &&
+          !name.includes('aarav') &&
+          !name.includes('kavita') &&
+          !m.id?.startsWith('e1000') &&
+          !m.id?.startsWith('e2000') &&
+          !m.id?.startsWith('e3000')
+        );
+      });
     } catch {
       return [];
     }
@@ -132,12 +144,16 @@ export const FamilyDetailPage: React.FC = () => {
 
   const isAdmin = currentUserRole === 'ADMIN';
 
-  // Merge server members with locally added members, filtering out removed members
+  // Merge server members with locally added members, filtering out removed members & mock members
   const memberList = useMemo(() => {
     const all = getAllFamilyMembers(family || null, user, profile?.full_name);
-    return all.filter(
-      (m) => !removedMemberIds.includes(m.id) && !removedMemberIds.includes(m.user_id)
-    );
+    return all.filter((m) => {
+      if (removedMemberIds.includes(m.id) || removedMemberIds.includes(m.user_id)) return false;
+      if (m.id?.startsWith('e1000') || m.id?.startsWith('e2000') || m.id?.startsWith('e3000')) return false;
+      const name = (m.name || m.member_name || m.user_name || '').toLowerCase();
+      if (name.includes('sarah') || name.includes('aarav') || name.includes('kavita')) return false;
+      return true;
+    });
   }, [family, user, profile, removedMemberIds]);
 
   // Check if removing self and if user is the sole admin

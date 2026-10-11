@@ -74,7 +74,20 @@ def list_my_families(
 
     family_ids = [m["family_id"] for m in fm_res.data]
     families_res = supabase.table("families").select("*").in_("id", family_ids).execute()
-    return families_res.data if families_res.data else []
+    families = families_res.data if families_res.data else []
+
+    if families:
+        all_members_res = supabase.table("family_members").select("*").in_("family_id", family_ids).execute()
+        members_by_fam = {}
+        for m in (all_members_res.data or []):
+            fid = str(m.get("family_id"))
+            if fid not in members_by_fam:
+                members_by_fam[fid] = []
+            members_by_fam[fid].append(m)
+        for f in families:
+            f["members"] = members_by_fam.get(str(f["id"]), [])
+
+    return families
 
 
 @router.get("/{family_id}", response_model=FamilyResponse)
