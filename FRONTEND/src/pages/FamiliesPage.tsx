@@ -20,6 +20,7 @@ import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useFamilies, useCreateFamily } from '../hooks/useFamilies';
+import { useFamily } from '../context/FamilyContext';
 import { useAuth } from '../hooks/useAuth';
 import { formatDate } from '../lib/utils';
 import type { Family, FamilyRole } from '../types';
@@ -41,7 +42,11 @@ type FamilyFormData = z.infer<typeof familySchema>;
 export const FamiliesPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { data: families, isLoading, isError, error, refetch } = useFamilies();
+  const { families: contextFamilies } = useFamily();
+  const { data: queryFamilies, isLoading: queryLoading, isError: queryError, error, refetch } = useFamilies();
+  const families = (queryFamilies && queryFamilies.length > 0) ? queryFamilies : (contextFamilies || []);
+  const isLoading = queryLoading && (!families || families.length === 0);
+  const isError = queryError && (!families || families.length === 0);
   const createFamilyMutation = useCreateFamily();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
