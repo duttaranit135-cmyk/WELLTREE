@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Pill, Plus, Calendar, Trash2, Edit3, User } from 'lucide-react';
+import { Pill, Plus, Calendar, Trash2, Edit3, User, Users } from 'lucide-react';
 import { useFamily } from '../context/FamilyContext';
 import { medicineService } from '../lib/services/medicineService';
 import type { Medicine, MedicineCreate } from '../types';
@@ -12,13 +12,21 @@ import { LoadingSpinner } from '../components/ui/LoadingSpinner';
 import { EmptyState } from '../components/ui/EmptyState';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
+import { getMemberDisplayName } from '../lib/utils';
 
 export const MedicinesPage: React.FC = () => {
-  const { activeFamily, activeMember, setActiveMember } = useFamily();
+  const { families, activeFamily, setActiveFamily, activeMember, setActiveMember } = useFamily();
   const [medicines, setMedicines] = useState<Medicine[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingMedicine, setEditingMedicine] = useState<Medicine | null>(null);
+
+  const handleFamilyChange = (famId: string) => {
+    const selected = families.find((f) => f.id === famId);
+    if (selected) {
+      setActiveFamily(selected);
+    }
+  };
 
   const [formData, setFormData] = useState<MedicineCreate>({
     family_member_id: '',
@@ -148,23 +156,46 @@ export const MedicinesPage: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          {families.length > 0 && (
+            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs hover:border-teal-300 transition-colors">
+              <Users className="w-4 h-4 text-teal-600 mr-2 shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 leading-none">Family</span>
+                <select
+                  className="text-sm font-semibold text-slate-800 bg-transparent focus:outline-none cursor-pointer pr-1"
+                  value={activeFamily?.id || ''}
+                  onChange={(e) => handleFamilyChange(e.target.value)}
+                >
+                  {families.map((fam) => (
+                    <option key={fam.id} value={fam.id}>
+                      {fam.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
           {activeFamily?.members && activeFamily.members.length > 0 && (
-            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs">
-              <User className="w-4 h-4 text-slate-400 mr-2" />
-              <select
-                className="text-sm font-medium text-slate-700 bg-transparent focus:outline-none cursor-pointer"
-                value={activeMember?.id || ''}
-                onChange={(e) => {
-                  const m = activeFamily.members?.find((mem) => mem.id === e.target.value);
-                  if (m) setActiveMember(m);
-                }}
-              >
-                {activeFamily.members.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.profile?.full_name || `Member (${m.role})`}
-                  </option>
-                ))}
-              </select>
+            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs hover:border-teal-300 transition-colors">
+              <User className="w-4 h-4 text-teal-600 mr-2 shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 leading-none">Family Member</span>
+                <select
+                  className="text-sm font-medium text-slate-700 bg-transparent focus:outline-none cursor-pointer pr-1"
+                  value={activeMember?.id || ''}
+                  onChange={(e) => {
+                    const m = activeFamily.members?.find((mem) => mem.id === e.target.value);
+                    if (m) setActiveMember(m);
+                  }}
+                >
+                  {activeFamily.members.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {getMemberDisplayName(m)}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           )}
 
@@ -270,6 +301,48 @@ export const MedicinesPage: React.FC = () => {
         title={editingMedicine ? 'Edit Medication' : 'Add Medication'}
       >
         <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                Select Family *
+              </label>
+              <select
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-teal-500 cursor-pointer"
+                value={activeFamily?.id || ''}
+                onChange={(e) => handleFamilyChange(e.target.value)}
+              >
+                {families.map((fam) => (
+                  <option key={fam.id} value={fam.id}>
+                    {fam.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                Select Family Member *
+              </label>
+              <select
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-teal-500 cursor-pointer"
+                value={formData.family_member_id || activeMember?.id || ''}
+                onChange={(e) => {
+                  const chosenId = e.target.value;
+                  setFormData((prev) => ({ ...prev, family_member_id: chosenId }));
+                  const chosen = activeFamily?.members?.find((m) => m.id === chosenId);
+                  if (chosen) setActiveMember(chosen);
+                }}
+                required
+              >
+                {activeFamily?.members?.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {getMemberDisplayName(m)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Medicine Name *

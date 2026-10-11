@@ -29,7 +29,7 @@ import {
   useFamily,
   useRemoveFamilyMember,
 } from '../hooks/useFamilies';
-import { formatDate } from '../lib/utils';
+import { formatDate, getAllFamilyMembers, getMemberDisplayName as getDisplayHelper } from '../lib/utils';
 import type { FamilyMember, FamilyRole, Family } from '../types';
 
 // UUID validation regex (RFC 4122) for optional backend cleanup
@@ -53,8 +53,14 @@ const roleOptions = [
   { value: 'ADMIN', label: 'ADMIN (Full family control)' },
 ];
 
-const createLocalMemberId = () => `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-const createLocalUserId = () => `user-${Date.now()}`;
+const createLocalMemberId = () =>
+  typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : '00000000-0000-4000-8000-' + Math.random().toString(16).slice(2, 14).padEnd(12, '0');
+const createLocalUserId = () =>
+  typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : '00000000-0000-4000-8000-' + Math.random().toString(16).slice(2, 14).padEnd(12, '0');
 const getCurrentTimestamp = () => new Date().toISOString();
 
 export const FamilyDetailPage: React.FC = () => {
@@ -66,6 +72,13 @@ export const FamilyDetailPage: React.FC = () => {
 
   const { data: family, isLoading, isError, error } = useFamily(familyId);
   const removeMemberMutation = useRemoveFamilyMember(familyId);
+
+  // Sync active family ID so other pages know which family is being managed
+  React.useEffect(() => {
+    if (familyId) {
+      localStorage.setItem('fhg_active_family_id', familyId);
+    }
+  }, [familyId]);
 
   // Local state for client-added members and removed members
   const [localMembers, setLocalMembers] = useState<FamilyMember[]>(() => {
@@ -121,15 +134,11 @@ export const FamilyDetailPage: React.FC = () => {
 
   // Merge server members with locally added members, filtering out removed members
   const memberList = useMemo(() => {
-    const serverMembers = (family?.members || []).filter(
+    const all = getAllFamilyMembers(family || null, user, profile?.full_name);
+    return all.filter(
       (m) => !removedMemberIds.includes(m.id) && !removedMemberIds.includes(m.user_id)
     );
-    const existingIds = new Set(serverMembers.map((m) => m.id));
-    const activeLocal = localMembers.filter(
-      (m) => !existingIds.has(m.id) && !removedMemberIds.includes(m.id)
-    );
-    return [...serverMembers, ...activeLocal];
-  }, [family?.members, localMembers, removedMemberIds]);
+  }, [family, user, profile, removedMemberIds]);
 
   // Check if removing self and if user is the sole admin
   const isRemovingSelf = memberToRemove?.user_id === user?.id;
@@ -139,25 +148,7 @@ export const FamilyDetailPage: React.FC = () => {
   }, [memberList, isRemovingSelf]);
 
   const getMemberDisplayName = (member: FamilyMember): string => {
-    if (member.user_id === user?.id) {
-      return (
-        profile?.full_name ||
-        user?.user_metadata?.full_name ||
-        user?.email?.split('@')[0] ||
-        'You'
-      );
-    }
-    if (member.name) return member.name;
-    if (member.member_name) return member.member_name;
-    if (member.user_name) return member.user_name;
-    if (member.profile?.full_name) return member.profile.full_name;
-    if (member.user_id === family?.created_by) {
-      return 'Family Admin';
-    }
-    if (member.user_id && member.user_id.length > 8) {
-      return `Family Member (${member.user_id.slice(0, 4)})`;
-    }
-    return member.user_id || 'Family Member';
+    return getDisplayHelper(member, user?.id, profile?.full_name);
   };
 
   const handleAddMemberSubmit = async (data: AddMemberFormData) => {

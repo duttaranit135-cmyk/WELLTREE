@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FileText, Download, Trash2, User, Eye, CheckCircle } from 'lucide-react';
+import { FileText, Download, Trash2, User, Users, Eye, CheckCircle } from 'lucide-react';
 import { useFamily } from '../context/FamilyContext';
 import { predictionService } from '../lib/services/predictionService';
 import { Card } from '../components/ui/Card';
@@ -9,12 +9,20 @@ import { Modal } from '../components/ui/Modal';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
 import { EmptyState } from '../components/ui/EmptyState';
 import toast from 'react-hot-toast';
+import { getMemberDisplayName } from '../lib/utils';
 
 export const PredictionHistoryPage: React.FC = () => {
-  const { activeFamily, activeMember, setActiveMember } = useFamily();
+  const { families, activeFamily, setActiveFamily, activeMember, setActiveMember } = useFamily();
   const [history, setHistory] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [selectedRecord, setSelectedRecord] = useState<any | null>(null);
+
+  const handleFamilyChange = (famId: string) => {
+    const selected = families.find((f) => f.id === famId);
+    if (selected) {
+      setActiveFamily(selected);
+    }
+  };
 
   const memberId = activeMember?.id || '';
 
@@ -90,24 +98,47 @@ export const PredictionHistoryPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {families.length > 0 && (
+            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs hover:border-teal-300 transition-colors">
+              <Users className="w-4 h-4 text-teal-600 mr-2 shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 leading-none">Family</span>
+                <select
+                  className="text-sm font-semibold text-slate-800 bg-transparent focus:outline-none cursor-pointer pr-1"
+                  value={activeFamily?.id || ''}
+                  onChange={(e) => handleFamilyChange(e.target.value)}
+                >
+                  {families.map((fam) => (
+                    <option key={fam.id} value={fam.id}>
+                      {fam.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
           {activeFamily?.members && activeFamily.members.length > 0 && (
-            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs">
-              <User className="w-4 h-4 text-slate-400 mr-2" />
-              <select
-                className="text-sm font-medium text-slate-700 bg-transparent focus:outline-none cursor-pointer"
-                value={activeMember?.id || ''}
-                onChange={(e) => {
-                  const m = activeFamily.members?.find((mem) => mem.id === e.target.value);
-                  if (m) setActiveMember(m);
-                }}
-              >
-                {activeFamily.members.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.profile?.full_name || `Member (${m.role})`}
-                  </option>
-                ))}
-              </select>
+            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs hover:border-teal-300 transition-colors">
+              <User className="w-4 h-4 text-teal-600 mr-2 shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 leading-none">Family Member</span>
+                <select
+                  className="text-sm font-medium text-slate-700 bg-transparent focus:outline-none cursor-pointer pr-1"
+                  value={activeMember?.id || ''}
+                  onChange={(e) => {
+                    const m = activeFamily.members?.find((mem) => mem.id === e.target.value);
+                    if (m) setActiveMember(m);
+                  }}
+                >
+                  {activeFamily.members.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {getMemberDisplayName(m)}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           )}
 

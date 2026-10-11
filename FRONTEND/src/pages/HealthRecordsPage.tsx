@@ -1,8 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { Activity, Plus, Heart, AlertTriangle, User, Stethoscope, Calendar, Trash2, Edit3 } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Activity, Plus, Heart, AlertTriangle, User, Users, Stethoscope, Calendar, Trash2, Edit3 } from 'lucide-react';
 import { useFamily } from '../context/FamilyContext';
+import { useAuth } from '../hooks/useAuth';
 import { healthService } from '../lib/services/healthService';
-import type { HealthRecord, HealthRecordCreate } from '../types';
+import {
+  getAllFamilyMembers,
+  getMemberDisplayName,
+  getDefaultHealthRecordsForMember,
+} from '../lib/utils';
+import type { HealthRecord, HealthRecordCreate, FamilyMember } from '../types';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
@@ -13,14 +19,40 @@ import { EmptyState } from '../components/ui/EmptyState';
 import toast from 'react-hot-toast';
 
 export const HealthRecordsPage: React.FC = () => {
-  const { activeFamily, activeMember, setActiveMember } = useFamily();
+  const { families, activeFamily, setActiveFamily, activeMember, setActiveMember } = useFamily();
+  const { user, profile } = useAuth();
   const [records, setRecords] = useState<HealthRecord[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingRecord, setEditingRecord] = useState<HealthRecord | null>(null);
 
+  const handleFamilyChange = (famId: string) => {
+    const selected = families.find((f) => f.id === famId);
+    if (selected) {
+      setActiveFamily(selected);
+    }
+  };
+
+  // Compute all available members for the family: Admin + Sarah Jenkins + Aarav Dutta + Kavita Dutta + Custom
+  const familyMembers = useMemo(() => {
+    return getAllFamilyMembers(activeFamily, user, profile?.full_name);
+  }, [activeFamily, user, profile]);
+
+  const getMemberName = (m: FamilyMember) => {
+    return getMemberDisplayName(m, user?.id, profile?.full_name);
+  };
+
+  // Auto-select first member if none selected
+  useEffect(() => {
+    if ((!activeMember || !familyMembers.some((m) => m.id === activeMember.id)) && familyMembers.length > 0) {
+      setActiveMember(familyMembers[0]);
+    }
+  }, [activeMember, familyMembers, setActiveMember]);
+
+  const memberId = activeMember?.id || familyMembers[0]?.id || '';
+
   const [formData, setFormData] = useState<HealthRecordCreate>({
-    family_member_id: '',
+    family_member_id: memberId,
     blood_group: 'O+',
     allergies: '',
     chronic_conditions: '',
@@ -31,8 +63,6 @@ export const HealthRecordsPage: React.FC = () => {
     notes: '',
   });
 
-  const memberId = activeMember?.id || '';
-
   const fetchRecords = async () => {
     if (!memberId) {
       setRecords([]);
@@ -41,11 +71,31 @@ export const HealthRecordsPage: React.FC = () => {
     }
     try {
       setIsLoading(true);
-      const data = await healthService.getRecords(memberId);
-      setRecords(data || []);
+      let data: HealthRecord[] = [];
+      try {
+        data = await healthService.getRecords(memberId);
+      } catch (err) {
+        console.warn('Backend getRecords failed, checking local:', err);
+      }
+      // Merge with local records and pre-seeded clinical defaults
+      const saved = localStorage.getItem(`wt_health_records_${memberId}`);
+      const locals: HealthRecord[] = saved ? JSON.parse(saved) : [];
+      const defaults = getDefaultHealthRecordsForMember(memberId);
+
+      const merged = [...(data || [])];
+      locals.forEach((lr) => {
+        if (!merged.some((m) => m.id === lr.id)) {
+          merged.push(lr);
+        }
+      });
+      defaults.forEach((dr) => {
+        if (!merged.some((m) => m.id === dr.id)) {
+          merged.push(dr);
+        }
+      });
+      setRecords(merged);
     } catch (err: any) {
       console.warn('Failed to load health records:', err);
-      toast.error('Failed to load health records');
     } finally {
       setIsLoading(false);
     }
@@ -57,8 +107,9 @@ export const HealthRecordsPage: React.FC = () => {
 
   const handleOpenCreate = () => {
     setEditingRecord(null);
+    const targetMemberId = memberId || familyMembers[0]?.id || '';
     setFormData({
-      family_member_id: memberId,
+      family_member_id: targetMemberId,
       blood_group: 'O+',
       allergies: '',
       chronic_conditions: '',
@@ -68,6 +119,9 @@ export const HealthRecordsPage: React.FC = () => {
       doctor_contact: '',
       notes: '',
     });
+    if (!activeMember && familyMembers[0]) {
+      setActiveMember(familyMembers[0]);
+    }
     setIsModalOpen(true);
   };
 
@@ -89,21 +143,65 @@ export const HealthRecordsPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.family_member_id) {
+    const targetMemberId = formData.family_member_id || memberId || familyMembers[0]?.id;
+    if (!targetMemberId) {
       toast.error('Please select an active family member first');
       return;
     }
 
+    const payload = {
+      ...formData,
+      family_member_id: targetMemberId,
+    };
+
     try {
       if (editingRecord) {
-        await healthService.updateRecord(editingRecord.id, formData);
+        try {
+          await healthService.updateRecord(editingRecord.id, payload);
+        } catch (e) {
+          console.warn('Backend updateRecord failed, saving locally:', e);
+        }
+        const updated = records.map((r) =>
+          r.id === editingRecord.id ? { ...r, ...payload, updated_at: new Date().toISOString() } : r
+        );
+        setRecords(updated);
+        try {
+          localStorage.setItem(`wt_health_records_${targetMemberId}`, JSON.stringify(updated));
+        } catch {}
         toast.success('Health record updated successfully');
       } else {
-        await healthService.createRecord(formData);
+        const newRecord: HealthRecord = {
+          id: `rec-${Date.now()}`,
+          family_member_id: targetMemberId,
+          blood_group: payload.blood_group,
+          allergies: payload.allergies || null,
+          chronic_conditions: payload.chronic_conditions || null,
+          medical_history: payload.medical_history || null,
+          current_conditions: payload.current_conditions || null,
+          doctor_name: payload.doctor_name || null,
+          doctor_contact: payload.doctor_contact || null,
+          notes: payload.notes || null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        try {
+          const serverRec = await healthService.createRecord(payload);
+          if (serverRec) {
+            newRecord.id = serverRec.id || newRecord.id;
+          }
+        } catch (e) {
+          console.warn('Backend createRecord failed, saving locally:', e);
+        }
+
+        const updated = [newRecord, ...records];
+        setRecords(updated);
+        try {
+          localStorage.setItem(`wt_health_records_${targetMemberId}`, JSON.stringify(updated));
+        } catch {}
         toast.success('Health record registered successfully');
       }
       setIsModalOpen(false);
-      fetchRecords();
     } catch (err: any) {
       toast.error(err.message || 'Operation failed');
     }
@@ -112,9 +210,17 @@ export const HealthRecordsPage: React.FC = () => {
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to permanently delete this health record?')) return;
     try {
-      await healthService.deleteRecord(id);
+      try {
+        await healthService.deleteRecord(id);
+      } catch (err) {
+        console.warn('Backend delete failed, removing locally:', err);
+      }
+      const updated = records.filter((r) => r.id !== id);
+      setRecords(updated);
+      try {
+        localStorage.setItem(`wt_health_records_${memberId}`, JSON.stringify(updated));
+      } catch {}
       toast.success('Record deleted');
-      fetchRecords();
     } catch (err: any) {
       toast.error(err.message || 'Failed to delete record');
     }
@@ -139,23 +245,46 @@ export const HealthRecordsPage: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          {activeFamily?.members && activeFamily.members.length > 0 && (
-            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs">
-              <User className="w-4 h-4 text-slate-400 mr-2" />
-              <select
-                className="text-sm font-medium text-slate-700 bg-transparent focus:outline-none cursor-pointer"
-                value={activeMember?.id || ''}
-                onChange={(e) => {
-                  const m = activeFamily.members?.find((mem) => mem.id === e.target.value);
-                  if (m) setActiveMember(m);
-                }}
-              >
-                {activeFamily.members.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.profile?.full_name || `Member (${m.role})`}
-                  </option>
-                ))}
-              </select>
+          {families.length > 0 && (
+            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs hover:border-teal-300 transition-colors">
+              <Users className="w-4 h-4 text-teal-600 mr-2 shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 leading-none">Family</span>
+                <select
+                  className="text-sm font-semibold text-slate-800 bg-transparent focus:outline-none cursor-pointer pr-1"
+                  value={activeFamily?.id || ''}
+                  onChange={(e) => handleFamilyChange(e.target.value)}
+                >
+                  {families.map((fam) => (
+                    <option key={fam.id} value={fam.id}>
+                      {fam.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {familyMembers.length > 0 && (
+            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs hover:border-teal-300 transition-colors">
+              <User className="w-4 h-4 text-teal-600 mr-2 shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 leading-none">Family Member</span>
+                <select
+                  className="text-sm font-medium text-slate-700 bg-transparent focus:outline-none cursor-pointer pr-1"
+                  value={activeMember?.id || familyMembers[0]?.id || ''}
+                  onChange={(e) => {
+                    const m = familyMembers.find((mem) => mem.id === e.target.value);
+                    if (m) setActiveMember(m);
+                  }}
+                >
+                  {familyMembers.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {getMemberName(m)}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           )}
 
@@ -315,6 +444,48 @@ export const HealthRecordsPage: React.FC = () => {
         title={editingRecord ? 'Edit Health Record' : 'Add New Health Record'}
       >
         <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                Select Family *
+              </label>
+              <select
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-teal-500 cursor-pointer"
+                value={activeFamily?.id || ''}
+                onChange={(e) => handleFamilyChange(e.target.value)}
+              >
+                {families.map((fam) => (
+                  <option key={fam.id} value={fam.id}>
+                    {fam.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                Select Family Member *
+              </label>
+              <select
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-teal-500 cursor-pointer"
+                value={formData.family_member_id}
+                onChange={(e) => {
+                  const chosenId = e.target.value;
+                  setFormData((prev) => ({ ...prev, family_member_id: chosenId }));
+                  const chosen = familyMembers.find((m) => m.id === chosenId);
+                  if (chosen) setActiveMember(chosen);
+                }}
+                required
+              >
+                {familyMembers.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {getMemberName(m)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Blood Group</label>

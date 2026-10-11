@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { FileText, Upload, Eye, Trash2, Calendar, User, AlertCircle, Shield, ExternalLink } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { FileText, Upload, Eye, Trash2, Calendar, User, Users, AlertCircle, Shield, ExternalLink } from 'lucide-react';
 import { useFamily } from '../context/FamilyContext';
+import { useAuth } from '../hooks/useAuth';
 import { medicalReportService } from '../lib/services/medicalReportService';
 import type { MedicalReport } from '../types';
 import { Button } from '../components/ui/Button';
@@ -10,9 +11,11 @@ import { Modal } from '../components/ui/Modal';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
 import { EmptyState } from '../components/ui/EmptyState';
 import toast from 'react-hot-toast';
+import { getMemberDisplayName, getAllFamilyMembers } from '../lib/utils';
 
 export const MedicalReportsPage: React.FC = () => {
-  const { activeFamily, activeMember, setActiveMember } = useFamily();
+  const { families, activeFamily, setActiveFamily, activeMember, setActiveMember } = useFamily();
+  const { user, profile } = useAuth();
   const [reports, setReports] = useState<MedicalReport[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isUploadOpen, setIsUploadOpen] = useState<boolean>(false);
@@ -27,7 +30,26 @@ export const MedicalReportsPage: React.FC = () => {
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const memberId = activeMember?.id || '';
+  // Compute all available members for the currently selected activeFamily
+  const familyMembers = useMemo(() => {
+    return getAllFamilyMembers(activeFamily, user, profile?.full_name);
+  }, [activeFamily, user, profile]);
+
+  // Auto-select first member when family changes or if none selected
+  useEffect(() => {
+    if ((!activeMember || !familyMembers.some((m) => m.id === activeMember.id)) && familyMembers.length > 0) {
+      setActiveMember(familyMembers[0]);
+    }
+  }, [activeMember, familyMembers, setActiveMember]);
+
+  const memberId = activeMember?.id || familyMembers[0]?.id || '';
+
+  const handleFamilyChange = (famId: string) => {
+    const selected = families.find((f) => f.id === famId);
+    if (selected) {
+      setActiveFamily(selected);
+    }
+  };
 
   const fetchReports = async () => {
     if (!memberId) {
@@ -154,23 +176,46 @@ export const MedicalReportsPage: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          {activeFamily?.members && activeFamily.members.length > 0 && (
-            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs">
-              <User className="w-4 h-4 text-slate-400 mr-2" />
-              <select
-                className="text-sm font-medium text-slate-700 bg-transparent focus:outline-none cursor-pointer"
-                value={activeMember?.id || ''}
-                onChange={(e) => {
-                  const m = activeFamily.members?.find((mem) => mem.id === e.target.value);
-                  if (m) setActiveMember(m);
-                }}
-              >
-                {activeFamily.members.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.profile?.full_name || `Member (${m.role})`}
-                  </option>
-                ))}
-              </select>
+          {families.length > 0 && (
+            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs hover:border-teal-300 transition-colors">
+              <Users className="w-4 h-4 text-teal-600 mr-2 shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 leading-none">Family</span>
+                <select
+                  className="text-sm font-semibold text-slate-800 bg-transparent focus:outline-none cursor-pointer pr-1"
+                  value={activeFamily?.id || ''}
+                  onChange={(e) => handleFamilyChange(e.target.value)}
+                >
+                  {families.map((fam) => (
+                    <option key={fam.id} value={fam.id}>
+                      {fam.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          {familyMembers.length > 0 && (
+            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs hover:border-teal-300 transition-colors">
+              <User className="w-4 h-4 text-teal-600 mr-2 shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 leading-none">Family Member</span>
+                <select
+                  className="text-sm font-medium text-slate-700 bg-transparent focus:outline-none cursor-pointer pr-1"
+                  value={activeMember?.id || familyMembers[0]?.id || ''}
+                  onChange={(e) => {
+                    const m = familyMembers.find((mem) => mem.id === e.target.value);
+                    if (m) setActiveMember(m);
+                  }}
+                >
+                  {familyMembers.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {getMemberDisplayName(m, user?.id, profile?.full_name)}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           )}
 
@@ -268,6 +313,45 @@ export const MedicalReportsPage: React.FC = () => {
 
       <Modal isOpen={isUploadOpen} onClose={() => setIsUploadOpen(false)} title="Upload Medical Document">
         <form onSubmit={handleUploadSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                Select Family *
+              </label>
+              <select
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-teal-500 cursor-pointer"
+                value={activeFamily?.id || ''}
+                onChange={(e) => handleFamilyChange(e.target.value)}
+              >
+                {families.map((fam) => (
+                  <option key={fam.id} value={fam.id}>
+                    {fam.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                Select Family Member *
+              </label>
+              <select
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-teal-500 cursor-pointer"
+                value={activeMember?.id || familyMembers[0]?.id || ''}
+                onChange={(e) => {
+                  const m = familyMembers.find((mem) => mem.id === e.target.value);
+                  if (m) setActiveMember(m);
+                }}
+              >
+                {familyMembers.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {getMemberDisplayName(m, user?.id, profile?.full_name)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
           <div
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleFileDrop}
