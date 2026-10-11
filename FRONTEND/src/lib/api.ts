@@ -41,10 +41,27 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+const REMOTE_API_URL = 'https://family-health-guardian-backend.onrender.com/api/v1';
+
 // Response Interceptor: Format error message from backend
 api.interceptors.response.use(
   (response) => response,
-  async (error: AxiosError<{ detail?: string | Array<{ msg?: string }> }>) => {
+  async (error: any) => {
+    const config = error.config;
+
+    // Auto-failover: If local backend is down (Network Error), seamlessly retry on remote Render backend
+    if (
+      (!error.response || error.code === 'ERR_NETWORK') &&
+      config &&
+      !config._retriedRemote &&
+      config.baseURL !== REMOTE_API_URL
+    ) {
+      config._retriedRemote = true;
+      config.baseURL = REMOTE_API_URL;
+      console.warn(`[API] Local backend unreachable. Retrying with remote backend: ${REMOTE_API_URL}`);
+      return api(config);
+    }
+
     if (error.response) {
       const status = error.response.status;
       const data = error.response.data;
@@ -54,7 +71,7 @@ api.interceptors.response.use(
       if (typeof data?.detail === 'string') {
         message = data.detail;
       } else if (Array.isArray(data?.detail) && data.detail.length > 0) {
-        message = data.detail.map((err) => err.msg || JSON.stringify(err)).join(', ');
+        message = data.detail.map((err: any) => err.msg || JSON.stringify(err)).join(', ');
       } else if (error.message) {
         message = error.message;
       }

@@ -58,7 +58,9 @@ export const MedicineSchedulesPage: React.FC = () => {
       setLogs(logData || []);
     } catch (err: any) {
       console.warn('Failed to load medicine schedules:', err);
-      toast.error('Failed to load schedule data');
+      setSchedules([]);
+      setMedicines([]);
+      setLogs([]);
     } finally {
       setIsLoading(false);
     }

@@ -80,11 +80,7 @@ export const MedicalReportsPage: React.FC = () => {
       setReports(data || []);
     } catch (err: any) {
       console.warn('Failed to load reports:', err);
-      if (err?.response?.status === 404) {
-        setReports([]);
-      } else {
-        toast.error(err?.response?.data?.detail || 'Failed to load reports');
-      }
+      setReports([]);
     } finally {
       setIsLoading(false);
     }
