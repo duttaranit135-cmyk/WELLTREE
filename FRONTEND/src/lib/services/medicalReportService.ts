@@ -10,7 +10,39 @@ const isUUID = (str?: string): boolean =>
 
 export const medicalReportService = {
   getReports: async (familyMemberId?: string, reportType?: string): Promise<MedicalReport[]> => {
-    // 1. Try backend API
+    // 1. Direct Supabase Query (~50ms)
+    if (familyMemberId && isUUID(familyMemberId)) {
+      try {
+        let query = supabase.from('medical_reports').select('*').eq('family_member_id', familyMemberId);
+        if (reportType) query = query.eq('report_type', reportType);
+        query = query.order('created_at', { ascending: false });
+        const { data, error } = await query;
+        if (!error && data) {
+          const withUrls = await Promise.all(
+            data.map(async (r: any) => {
+              try {
+                if (r.storage_path) {
+                  const { data: signed } = await supabase.storage
+                    .from('medical-reports')
+                    .createSignedUrl(r.storage_path, 300);
+                  return { ...r, download_url: signed?.signedUrl || r.download_url };
+                }
+                return r;
+              } catch {
+                return r;
+              }
+            })
+          );
+          try {
+            const cacheKey = familyMemberId ? `wt_reports_${familyMemberId}` : 'wt_reports_all';
+            localStorage.setItem(cacheKey, JSON.stringify(withUrls));
+          } catch {}
+          return withUrls as MedicalReport[];
+        }
+      } catch {}
+    }
+
+    // 2. Try backend API
     try {
       const params: Record<string, any> = {};
       if (isUUID(familyMemberId)) {
@@ -26,36 +58,7 @@ export const medicalReportService = {
         return res.data;
       }
     } catch (backendError) {
-      console.warn('[medicalReportService] Backend /medical-reports failed, falling back to Supabase:', backendError);
-    }
-
-    // 2. Direct Supabase Query Fallback
-    try {
-      let query = supabase.from('medical_reports').select('*');
-      if (isUUID(familyMemberId)) {
-        query = query.eq('family_member_id', familyMemberId);
-      }
-      if (reportType) {
-        query = query.eq('report_type', reportType);
-      }
-      const { data, error } = await query.order('created_at', { ascending: false });
-      if (!error && data) {
-        const withUrls = await Promise.all(
-          data.map(async (r: any) => {
-            try {
-              const { data: signed } = await supabase.storage
-                .from('medical-reports')
-                .createSignedUrl(r.storage_path, 300);
-              return { ...r, download_url: signed?.signedUrl || r.download_url };
-            } catch {
-              return r;
-            }
-          })
-        );
-        return withUrls;
-      }
-    } catch (sbErr) {
-      console.warn('[medicalReportService] Direct Supabase query failed:', sbErr);
+      console.warn('[medicalReportService] Backend /medical-reports failed, falling back:', backendError);
     }
 
     // 3. Cache fallback
@@ -71,17 +74,20 @@ export const medicalReportService = {
   },
 
   getReportById: async (id: string): Promise<MedicalReport> => {
-    try {
-      const res = await api.get<MedicalReport>(`/medical-reports/${id}`);
-      return res.data;
-    } catch (apiErr) {
-      const { data, error } = await supabase.from('medical_reports').select('*').eq('id', id).single();
-      if (!error && data) {
-        const { data: signed } = await supabase.storage.from('medical-reports').createSignedUrl(data.storage_path, 300);
-        return { ...data, download_url: signed?.signedUrl };
-      }
-      throw apiErr;
+    if (isUUID(id)) {
+      try {
+        const { data, error } = await supabase.from('medical_reports').select('*').eq('id', id).maybeSingle();
+        if (!error && data) {
+          if (data.storage_path) {
+            const { data: signed } = await supabase.storage.from('medical-reports').createSignedUrl(data.storage_path, 300);
+            data.download_url = signed?.signedUrl || data.download_url;
+          }
+          return data as MedicalReport;
+        }
+      } catch {}
     }
+    const res = await api.get<MedicalReport>(`/medical-reports/${id}`);
+    return res.data;
   },
 
   uploadReport: async (formData: FormData): Promise<MedicalReport> => {
@@ -183,11 +189,13 @@ export const medicalReportService = {
       await api.delete(`/medical-reports/${id}`);
     } catch (apiErr) {
       console.warn('[medicalReportService] Backend delete failed, falling back to Supabase:', apiErr);
-      const { data } = await supabase.from('medical_reports').select('storage_path').eq('id', id).single();
-      if (data?.storage_path) {
-        await supabase.storage.from('medical-reports').remove([data.storage_path]);
-      }
-      await supabase.from('medical_reports').delete().eq('id', id);
+      try {
+        const { data } = await supabase.from('medical_reports').select('storage_path').eq('id', id).single();
+        if (data?.storage_path) {
+          await supabase.storage.from('medical-reports').remove([data.storage_path]);
+        }
+        await supabase.from('medical_reports').delete().eq('id', id);
+      } catch {}
     }
   },
 };

@@ -20,10 +20,51 @@ const FamilyContext = createContext<FamilyContextType | undefined>(undefined);
 
 export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isAuthenticated } = useAuth();
-  const [families, setFamilies] = useState<Family[]>([]);
-  const [activeFamily, setActiveFamilyState] = useState<Family | null>(null);
-  const [activeMember, setActiveMember] = useState<FamilyMember | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [families, setFamilies] = useState<Family[]>(() => {
+    try {
+      const cached = localStorage.getItem('wt_all_families');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return [];
+  });
+  const [activeFamily, setActiveFamilyState] = useState<Family | null>(() => {
+    try {
+      const cached = localStorage.getItem('wt_all_families');
+      const savedFamilyId = localStorage.getItem('fhg_active_family_id');
+      if (cached) {
+        const list = JSON.parse(cached);
+        if (Array.isArray(list) && list.length > 0) {
+          return list.find((f: any) => f.id === savedFamilyId) || list[0];
+        }
+      }
+    } catch {}
+    return null;
+  });
+  const [activeMember, setActiveMember] = useState<FamilyMember | null>(() => {
+    try {
+      const cached = localStorage.getItem('wt_all_families');
+      const savedFamilyId = localStorage.getItem('fhg_active_family_id');
+      const savedMemberId = localStorage.getItem('fhg_active_member_id');
+      if (cached) {
+        const list = JSON.parse(cached);
+        if (Array.isArray(list) && list.length > 0) {
+          const fam = list.find((f: any) => f.id === savedFamilyId) || list[0];
+          const members = getAllFamilyMembers(fam, null);
+          const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+          if (savedMemberId && uuidRegex.test(savedMemberId)) {
+            const found = members.find((m: any) => m.id === savedMemberId);
+            if (found) return found;
+          }
+          return members[0] || null;
+        }
+      }
+    } catch {}
+    return null;
+  });
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
   const fetchFamilies = useCallback(async () => {
     if (!isAuthenticated || !user) {
@@ -35,7 +76,6 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
 
     try {
-      setIsLoading(true);
       let data: Family[] = [];
       try {
         data = await familyService.getFamilies();
@@ -97,8 +137,15 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setActiveFamilyState(matched);
 
         const savedMemberId = localStorage.getItem('fhg_active_member_id');
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (savedMemberId && !uuidRegex.test(savedMemberId)) {
+          try {
+            localStorage.removeItem('fhg_active_member_id');
+          } catch {}
+        }
+        const validSavedMemberId = savedMemberId && uuidRegex.test(savedMemberId) ? savedMemberId : null;
         const userMember =
-          combinedMembers.find((m: FamilyMember) => m.id === savedMemberId) ||
+          (validSavedMemberId && combinedMembers.find((m: FamilyMember) => m.id === validSavedMemberId)) ||
           combinedMembers.find((m: FamilyMember) => m.user_id === user.id) ||
           combinedMembers[0];
 
@@ -133,8 +180,15 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setActiveFamilyState(detailedFamily);
 
         const savedMemberId = localStorage.getItem('fhg_active_member_id');
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (savedMemberId && !uuidRegex.test(savedMemberId)) {
+          try {
+            localStorage.removeItem('fhg_active_member_id');
+          } catch {}
+        }
+        const validSavedMemberId = savedMemberId && uuidRegex.test(savedMemberId) ? savedMemberId : null;
         const userMember =
-          combinedMembers.find((m: FamilyMember) => m.id === savedMemberId) ||
+          (validSavedMemberId && combinedMembers.find((m: FamilyMember) => m.id === validSavedMemberId)) ||
           combinedMembers.find((m: FamilyMember) => m.user_id === user?.id) ||
           combinedMembers[0];
 

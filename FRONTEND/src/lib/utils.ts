@@ -166,20 +166,32 @@ export function getAllFamilyMembers(
     if (idKey && seenIds.has(idKey)) return;
     if (nameKey && seenNames.has(nameKey)) return;
 
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(m.id)) {
+      m.id = uuidRegex.test(m.user_id)
+        ? m.user_id
+        : (typeof crypto !== 'undefined' && crypto.randomUUID
+            ? crypto.randomUUID()
+            : '508645ce-8c5e-4c7c-9b88-51829e598b96');
+    }
+
     if (idKey) seenIds.add(idKey);
     if (nameKey) seenNames.add(nameKey);
     result.push(m);
   };
 
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const adminDisplayName =
     userDisplayName ||
     user?.user_metadata?.full_name ||
     user?.email?.split('@')[0] ||
     'Ranit Dutta';
-  const adminUserId = user?.id || '508645ce-8c5e-4c7c-9b88-51829e598b96';
+  const adminUserId = (user?.id && uuidRegex.test(user.id)) ? user.id : '508645ce-8c5e-4c7c-9b88-51829e598b96';
+  const foundAdminId = activeFamily?.members?.find((m) => m.user_id === user?.id || m.role === 'ADMIN')?.id;
   const adminMemberId =
-    activeFamily?.members?.find((m) => m.user_id === user?.id || m.role === 'ADMIN')?.id ||
-    adminUserId;
+    foundAdminId && uuidRegex.test(foundAdminId)
+      ? foundAdminId
+      : adminUserId;
 
   // 1. Add server members from activeFamily
   if (activeFamily?.members && activeFamily.members.length > 0) {

@@ -8,7 +8,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 15000,
+  timeout: 3500,
 });
 
 // Request Interceptor: Attach Supabase JWT bearer token if available

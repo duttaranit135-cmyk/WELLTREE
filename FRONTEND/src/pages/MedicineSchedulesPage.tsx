@@ -48,11 +48,14 @@ export const MedicineSchedulesPage: React.FC = () => {
 
     try {
       setIsLoading(true);
-      const [schedData, medData, logData] = await Promise.all([
+      const [schedResult, medResult, logResult] = await Promise.allSettled([
         medicineService.getSchedules(undefined, memberId),
         medicineService.getMedicines(memberId, true),
         medicineService.getLogs(memberId),
       ]);
+      const schedData = schedResult.status === 'fulfilled' ? schedResult.value : [];
+      const medData = medResult.status === 'fulfilled' ? medResult.value : [];
+      const logData = logResult.status === 'fulfilled' ? logResult.value : [];
       setSchedules(schedData || []);
       setMedicines(medData || []);
       setLogs(logData || []);

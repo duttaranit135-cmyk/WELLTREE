@@ -7,21 +7,62 @@ import type {
   FamilyMemberAddInput,
 } from '../../types';
 
-export const getFamilies = async (): Promise<Family[]> => {
-  // 1. Try Backend API
+const refreshFamiliesInBackground = async () => {
   try {
-    const response = await api.get<Family[]>('/families');
-    if (response.data && response.data.length > 0) {
-      try {
-        localStorage.setItem('wt_all_families', JSON.stringify(response.data));
-      } catch {}
-      return response.data;
-    }
-  } catch (backendError) {
-    console.warn('[familyService] Backend /families failed, falling back to Supabase/cache:', backendError);
-  }
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data: memberships } = await supabase
+      .from('family_members')
+      .select('family_id')
+      .eq('user_id', user.id);
 
-  // 2. Direct Supabase Query Fallback
+    if (memberships && memberships.length > 0) {
+      const familyIds = memberships.map((m: any) => m.family_id);
+      const { data: families } = await supabase
+        .from('families')
+        .select('*')
+        .in('id', familyIds);
+
+      if (families && families.length > 0) {
+        const { data: members } = await supabase
+          .from('family_members')
+          .select('*')
+          .in('family_id', familyIds);
+
+        const membersByFam: Record<string, any[]> = {};
+        (members || []).forEach((m: any) => {
+          const fid = m.family_id;
+          if (!membersByFam[fid]) membersByFam[fid] = [];
+          membersByFam[fid].push(m);
+        });
+
+        const mapped: Family[] = families.map((f: any) => ({
+          ...f,
+          members: membersByFam[f.id] || [],
+        }));
+
+        try {
+          localStorage.setItem('wt_all_families', JSON.stringify(mapped));
+        } catch {}
+      }
+    }
+  } catch {}
+};
+
+export const getFamilies = async (): Promise<Family[]> => {
+  // 1. Instant Cache Return (0ms)
+  try {
+    const cached = localStorage.getItem('wt_all_families');
+    if (cached) {
+      const list: Family[] = JSON.parse(cached);
+      if (Array.isArray(list) && list.length > 0) {
+        setTimeout(refreshFamiliesInBackground, 50);
+        return list;
+      }
+    }
+  } catch {}
+
+  // 2. Direct Supabase Query (ultra-fast, ~60ms)
   try {
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
@@ -66,16 +107,18 @@ export const getFamilies = async (): Promise<Family[]> => {
     console.warn('[familyService] Supabase direct fallback failed:', sbError);
   }
 
-  // 3. LocalStorage Cache Fallback
+  // 3. Try Backend API
   try {
-    const cached = localStorage.getItem('wt_all_families');
-    if (cached) {
-      const list: Family[] = JSON.parse(cached);
-      if (Array.isArray(list) && list.length > 0) {
-        return list;
-      }
+    const response = await api.get<Family[]>('/families');
+    if (response.data && response.data.length > 0) {
+      try {
+        localStorage.setItem('wt_all_families', JSON.stringify(response.data));
+      } catch {}
+      return response.data;
     }
-  } catch {}
+  } catch (backendError) {
+    console.warn('[familyService] Backend /families failed:', backendError);
+  }
 
   // 4. Default Seed Family Fallback
   return [
@@ -92,17 +135,17 @@ export const getFamilies = async (): Promise<Family[]> => {
 };
 
 export const getFamily = async (familyId: string): Promise<Family> => {
-  // 1. Try Backend API
+  // 1. Fast Cache Check (0ms)
   try {
-    const response = await api.get<Family>(`/families/${familyId}`);
-    if (response.data) {
-      return response.data;
+    const cached = localStorage.getItem('wt_all_families');
+    if (cached) {
+      const list: Family[] = JSON.parse(cached);
+      const found = list.find((f) => f.id === familyId);
+      if (found && found.members && found.members.length > 0) return found;
     }
-  } catch (backendError) {
-    console.warn(`[familyService] Backend /families/${familyId} failed, trying Supabase:`, backendError);
-  }
+  } catch {}
 
-  // 2. Direct Supabase Query Fallback
+  // 2. Direct Supabase Query (~50ms)
   try {
     const { data: fam } = await supabase
       .from('families')
@@ -125,15 +168,15 @@ export const getFamily = async (familyId: string): Promise<Family> => {
     console.warn('[familyService] Supabase getFamily fallback failed:', sbErr);
   }
 
-  // 3. Fallback from cached list
+  // 3. Try Backend API
   try {
-    const cached = localStorage.getItem('wt_all_families');
-    if (cached) {
-      const list: Family[] = JSON.parse(cached);
-      const found = list.find((f) => f.id === familyId);
-      if (found) return found;
+    const response = await api.get<Family>(`/families/${familyId}`);
+    if (response.data) {
+      return response.data;
     }
-  } catch {}
+  } catch (backendError) {
+    console.warn(`[familyService] Backend /families/${familyId} failed:`, backendError);
+  }
 
   return {
     id: familyId,

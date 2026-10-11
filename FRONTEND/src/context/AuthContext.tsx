@@ -26,13 +26,43 @@ export const AuthContext = createContext<AuthContextType | undefined>(undefined)
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(() => {
+    try {
+      const cached = localStorage.getItem('wt_user_profile');
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return null;
+  });
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const fetchProfile = useCallback(async (): Promise<Profile | null> => {
+    // 1. Direct Supabase Query (ultra-fast, ~50ms)
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: sbProfile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (sbProfile) {
+          setProfile(sbProfile as Profile);
+          try {
+            localStorage.setItem('wt_user_profile', JSON.stringify(sbProfile));
+          } catch {}
+          return sbProfile as Profile;
+        }
+      }
+    } catch {}
+
+    // 2. Backend API fallback
     try {
       const response = await api.get<Profile>('/profiles/me');
       setProfile(response.data);
+      try {
+        localStorage.setItem('wt_user_profile', JSON.stringify(response.data));
+      } catch {}
       return response.data;
     } catch (error: unknown) {
       const status =
@@ -44,7 +74,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else {
         console.warn('[Auth] Failed to fetch profile:', error);
       }
-      setProfile(null);
       return null;
     }
   }, []);
@@ -62,16 +91,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (isMounted) {
           setSession(initialSession);
           setUser(initialSession?.user ?? null);
+          setIsLoading(false); // Render page instantly without blocking on profile fetch
           if (initialSession) {
-            await fetchProfile();
+            fetchProfile(); // Load profile non-blockingly
           }
         }
       } catch (error) {
         console.error('[Auth] Failed to initialize session:', error);
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
+        if (isMounted) setIsLoading(false);
       }
     };
 
