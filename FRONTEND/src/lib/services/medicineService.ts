@@ -3,6 +3,7 @@ import { supabase } from '../supabase';
 import type {
   Medicine,
   MedicineCreate,
+  MedicineStockUpdate,
   MedicineSchedule,
   MedicineScheduleCreate,
   MedicineLog,
@@ -141,6 +142,44 @@ export const medicineService = {
       }
     }
     throw new Error('Failed to update medicine');
+  },
+
+  updateStock: async (id: string, update: MedicineStockUpdate): Promise<Medicine> => {
+    try {
+      const res = await api.patch<Medicine>(`/medicines/${id}/stock`, update);
+      if (res.data) return res.data;
+    } catch (backendError) {
+      console.warn(`[medicineService] Backend PATCH /medicines/${id}/stock failed, trying direct update:`, backendError);
+      try {
+        const cur = await medicineService.getMedicineById(id);
+        let newRem = cur.remaining_quantity !== null && cur.remaining_quantity !== undefined ? Number(cur.remaining_quantity) : Number(cur.total_quantity || 0);
+        let newTotal = Number(cur.total_quantity || newRem);
+        if (update.remaining_quantity !== undefined) {
+          newRem = Math.max(0, Number(update.remaining_quantity));
+          newTotal = Math.max(newTotal, newRem);
+        } else if (update.restock_amount !== undefined) {
+          newRem += Number(update.restock_amount);
+          newTotal += Number(update.restock_amount);
+        } else if (update.quantity_consumed !== undefined) {
+          newRem = Math.max(0, newRem - Number(update.quantity_consumed));
+        }
+
+        const daily = Number(cur.daily_usage || 1);
+        const threshold = Number(cur.refill_reminder_days_before || 3);
+        const daysLeft = daily > 0 ? newRem / daily : 0;
+        const newStockStatus: 'AVAILABLE' | 'LOW_STOCK' | 'OUT_OF_STOCK' =
+          newRem <= 0 ? 'OUT_OF_STOCK' : daysLeft <= threshold ? 'LOW_STOCK' : 'AVAILABLE';
+
+        return await medicineService.updateMedicine(id, {
+          remaining_quantity: newRem,
+          total_quantity: newTotal,
+          stock_status: newStockStatus,
+        });
+      } catch {
+        throw backendError;
+      }
+    }
+    throw new Error('Failed to update medicine stock');
   },
 
   deleteMedicine: async (id: string): Promise<void> => {

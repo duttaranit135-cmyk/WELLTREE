@@ -539,3 +539,143 @@ def test_delete_medicine_unauthorized_forbidden(client, auth_headers, test_user_
 def test_unauthenticated_request_rejected(client):
     response = client.get("/medicines")
     assert response.status_code in (401, 403)
+
+
+def test_create_medicine_with_duration_and_stock(client, auth_headers, test_user_id):
+    family_member_id = str(uuid.uuid4())
+    family_id = str(uuid.uuid4())
+
+    mock_db = setup_mock_supabase({
+        "family_members": [{
+            "id": family_member_id,
+            "family_id": family_id,
+            "user_id": test_user_id,
+            "role": "MEMBER"
+        }],
+        "medicines": []
+    })
+
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    payload = {
+        "family_member_id": family_member_id,
+        "medicine_name": "Azithromycin",
+        "dosage": "250",
+        "dosage_unit": "tablets",
+        "start_date": "2026-10-15",
+        "duration_days": 10,
+        "total_quantity": 20,
+        "remaining_quantity": 20,
+        "daily_usage": 2,
+        "refill_reminder_days_before": 3,
+        "is_active": True
+    }
+
+    response = client.post("/medicines", json=payload, headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["medicine_name"] == "Azithromycin"
+    assert data["duration_days"] == 10
+    assert data["end_date"] == "2026-10-25"  # 2026-10-15 + 10 days
+    assert data["total_quantity"] == 20
+    assert data["remaining_quantity"] == 20
+    assert data["stock_status"] == "AVAILABLE"
+
+
+def test_update_medicine_stock_consumption(client, auth_headers, test_user_id):
+    family_member_id = str(uuid.uuid4())
+    family_id = str(uuid.uuid4())
+    med_id = str(uuid.uuid4())
+
+    mock_db = setup_mock_supabase({
+        "family_members": [{
+            "id": family_member_id,
+            "family_id": family_id,
+            "user_id": test_user_id,
+            "role": "MEMBER"
+        }],
+        "medicines": [{
+            "id": med_id,
+            "family_member_id": family_member_id,
+            "medicine_name": "Metformin",
+            "total_quantity": 60,
+            "remaining_quantity": 10,
+            "daily_usage": 2,
+            "refill_reminder_days_before": 5,
+            "stock_status": "AVAILABLE",
+            "is_active": True,
+            "created_at": "2026-10-01T00:00:00Z",
+            "updated_at": "2026-10-01T00:00:00Z"
+        }],
+        "notifications": []
+    })
+
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    # Deduct consumed doses (remaining drops from 10 to 4: 4/2 = 2 days <= 5 threshold -> LOW_STOCK)
+    consume_payload = {"quantity_consumed": 6, "note": "Taken per prescription"}
+    resp = client.patch(f"/medicines/{med_id}/stock", json=consume_payload, headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["remaining_quantity"] == 4.0
+    assert data["stock_status"] == "LOW_STOCK"
+
+
+def test_update_medicine_stock_restock(client, auth_headers, test_user_id):
+    family_member_id = str(uuid.uuid4())
+    family_id = str(uuid.uuid4())
+    med_id = str(uuid.uuid4())
+
+    mock_db = setup_mock_supabase({
+        "family_members": [{
+            "id": family_member_id,
+            "family_id": family_id,
+            "user_id": test_user_id,
+            "role": "MEMBER"
+        }],
+        "medicines": [{
+            "id": med_id,
+            "family_member_id": family_member_id,
+            "medicine_name": "Metformin",
+            "total_quantity": 60,
+            "remaining_quantity": 10,
+            "daily_usage": 2,
+            "refill_reminder_days_before": 5,
+            "stock_status": "AVAILABLE",
+            "is_active": True,
+            "created_at": "2026-10-01T00:00:00Z",
+            "updated_at": "2026-10-01T00:00:00Z"
+        }],
+        "notifications": []
+    })
+
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    # Restock by adding 30 tablets (10 + 30 = 40: 40/2 = 20 days > 5 -> AVAILABLE)
+    restock_payload = {"restock_amount": 30, "note": "Purchased from pharmacy"}
+    resp = client.patch(f"/medicines/{med_id}/stock", json=restock_payload, headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["remaining_quantity"] == 40.0
+    assert data["stock_status"] == "AVAILABLE"
+
+
+
+def test_medicine_validation_negative_quantity_and_duration(client, auth_headers, test_user_id):
+    family_member_id = str(uuid.uuid4())
+    payload = {
+        "family_member_id": family_member_id,
+        "medicine_name": "Invalid Medicine",
+        "duration_days": -5,
+        "total_quantity": -10,
+        "daily_usage": 0
+    }
+    response = client.post("/medicines", json=payload, headers=auth_headers)
+    assert response.status_code == 422
+

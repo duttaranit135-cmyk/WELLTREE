@@ -143,6 +143,13 @@ export interface Medicine {
   start_date?: string | null;
   end_date?: string | null;
   duration_days?: number | null;
+  total_quantity?: number | null;
+  remaining_quantity?: number | null;
+  daily_usage?: number | null;
+  refill_reminder_date?: string | null;
+  refill_reminder_days_before?: number | null;
+  stock_status?: 'AVAILABLE' | 'LOW_STOCK' | 'OUT_OF_STOCK' | null;
+  status?: 'ACTIVE' | 'COMPLETED' | 'DISCONTINUED' | null;
   prescribed_by?: string | null;
   instructions?: string | null;
   is_active: boolean;
@@ -160,9 +167,23 @@ export interface MedicineCreate {
   start_date?: string;
   end_date?: string;
   duration_days?: number;
+  total_quantity?: number;
+  remaining_quantity?: number;
+  daily_usage?: number;
+  refill_reminder_date?: string;
+  refill_reminder_days_before?: number;
+  stock_status?: 'AVAILABLE' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+  status?: 'ACTIVE' | 'COMPLETED' | 'DISCONTINUED';
   prescribed_by?: string;
   instructions?: string;
   is_active?: boolean;
+}
+
+export interface MedicineStockUpdate {
+  remaining_quantity?: number;
+  restock_amount?: number;
+  quantity_consumed?: number;
+  note?: string;
 }
 
 export interface MedicineSchedule {
