@@ -142,6 +142,7 @@ export interface Medicine {
   route?: string | null;
   start_date?: string | null;
   end_date?: string | null;
+  duration_days?: number | null;
   prescribed_by?: string | null;
   instructions?: string | null;
   is_active: boolean;
@@ -158,6 +159,7 @@ export interface MedicineCreate {
   route?: string;
   start_date?: string;
   end_date?: string;
+  duration_days?: number;
   prescribed_by?: string;
   instructions?: string;
   is_active?: boolean;
