@@ -26,14 +26,17 @@ class FamilyUpdate(BaseModel):
 
 
 class FamilyMemberAdd(BaseModel):
-    user_id: UUID
+    user_id: Optional[UUID] = None
+    user_name: Optional[str] = None
+    name: Optional[str] = None
     role: FamilyRole = FamilyRole.MEMBER
 
 
 class FamilyMemberResponse(BaseModel):
     id: UUID
     family_id: UUID
-    user_id: UUID
+    user_id: Optional[UUID] = None
+    user_name: Optional[str] = None
     role: FamilyRole
     joined_at: datetime
 

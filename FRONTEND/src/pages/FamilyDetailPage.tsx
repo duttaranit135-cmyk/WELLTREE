@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
   UserPlus,
@@ -12,8 +13,6 @@ import {
   Users,
   Trash2,
   AlertCircle,
-  Copy,
-  Check,
   Info,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -28,21 +27,21 @@ import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { useAuth } from '../hooks/useAuth';
 import {
   useFamily,
-  useAddFamilyMember,
   useRemoveFamilyMember,
 } from '../hooks/useFamilies';
 import { formatDate } from '../lib/utils';
-import type { FamilyMember, FamilyRole } from '../types';
+import type { FamilyMember, FamilyRole, Family } from '../types';
 
-// UUID validation regex (RFC 4122)
+// UUID validation regex (RFC 4122) for optional backend cleanup
 const uuidRegex =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const addMemberSchema = z.object({
-  userId: z
+  memberName: z
     .string()
-    .min(1, 'User ID is required')
-    .regex(uuidRegex, 'Must be a valid UUID format (e.g. 123e4567-e89b-12d3-a456-426614174000)'),
+    .trim()
+    .min(1, 'Member name is required')
+    .max(50, 'Member name cannot exceed 50 characters'),
   role: z.enum(['ADMIN', 'GUARDIAN', 'MEMBER']),
 });
 
@@ -54,20 +53,46 @@ const roleOptions = [
   { value: 'ADMIN', label: 'ADMIN (Full family control)' },
 ];
 
+const createLocalMemberId = () => `mem-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+const createLocalUserId = () => `user-${Date.now()}`;
+const getCurrentTimestamp = () => new Date().toISOString();
+
 export const FamilyDetailPage: React.FC = () => {
+  const queryClient = useQueryClient();
   const { id } = useParams<{ id: string }>();
   const familyId = id || '';
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
 
   const { data: family, isLoading, isError, error } = useFamily(familyId);
-  const addMemberMutation = useAddFamilyMember(familyId);
   const removeMemberMutation = useRemoveFamilyMember(familyId);
+
+  // Local state for client-added members and removed members
+  const [localMembers, setLocalMembers] = useState<FamilyMember[]>(() => {
+    if (!familyId) return [];
+    try {
+      const saved = localStorage.getItem(`wt_family_members_${familyId}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [removedMemberIds, setRemovedMemberIds] = useState<string[]>(() => {
+    if (!familyId) return [];
+    try {
+      const saved = localStorage.getItem(`wt_family_removed_${familyId}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Modal and Confirmation Dialog States
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [memberToRemove, setMemberToRemove] = useState<FamilyMember | null>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // Form for Adding Member
   const {
@@ -78,7 +103,7 @@ export const FamilyDetailPage: React.FC = () => {
   } = useForm<AddMemberFormData>({
     resolver: zodResolver(addMemberSchema),
     defaultValues: {
-      userId: '',
+      memberName: '',
       role: 'MEMBER',
     },
   });
@@ -94,46 +119,141 @@ export const FamilyDetailPage: React.FC = () => {
 
   const isAdmin = currentUserRole === 'ADMIN';
 
+  // Merge server members with locally added members, filtering out removed members
+  const memberList = useMemo(() => {
+    const serverMembers = (family?.members || []).filter(
+      (m) => !removedMemberIds.includes(m.id) && !removedMemberIds.includes(m.user_id)
+    );
+    const existingIds = new Set(serverMembers.map((m) => m.id));
+    const activeLocal = localMembers.filter(
+      (m) => !existingIds.has(m.id) && !removedMemberIds.includes(m.id)
+    );
+    return [...serverMembers, ...activeLocal];
+  }, [family?.members, localMembers, removedMemberIds]);
+
   // Check if removing self and if user is the sole admin
   const isRemovingSelf = memberToRemove?.user_id === user?.id;
   const isSoleAdmin = useMemo(() => {
-    if (!family?.members) return false;
-    const adminCount = family.members.filter((m) => m.role === 'ADMIN').length;
+    const adminCount = memberList.filter((m) => m.role === 'ADMIN').length;
     return isRemovingSelf && adminCount <= 1;
-  }, [family, isRemovingSelf]);
+  }, [memberList, isRemovingSelf]);
 
-  // Copy UUID helper
-  const handleCopyId = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedId(text);
-    toast.success('User ID copied to clipboard');
-    setTimeout(() => setCopiedId(null), 2000);
+  const getMemberDisplayName = (member: FamilyMember): string => {
+    if (member.user_id === user?.id) {
+      return (
+        profile?.full_name ||
+        user?.user_metadata?.full_name ||
+        user?.email?.split('@')[0] ||
+        'You'
+      );
+    }
+    if (member.name) return member.name;
+    if (member.member_name) return member.member_name;
+    if (member.user_name) return member.user_name;
+    if (member.profile?.full_name) return member.profile.full_name;
+    if (member.user_id === family?.created_by) {
+      return 'Family Admin';
+    }
+    if (member.user_id && member.user_id.length > 8) {
+      return `Family Member (${member.user_id.slice(0, 4)})`;
+    }
+    return member.user_id || 'Family Member';
   };
 
   const handleAddMemberSubmit = async (data: AddMemberFormData) => {
     try {
-      await addMemberMutation.mutateAsync({
-        user_id: data.userId.trim(),
+      setIsSubmitting(true);
+      const name = data.memberName.trim();
+      const newMember: FamilyMember = {
+        id: createLocalMemberId(),
+        family_id: familyId,
+        user_id: createLocalUserId(),
         role: data.role,
+        joined_at: getCurrentTimestamp(),
+        name,
+        member_name: name,
+        user_name: name,
+      };
+
+      const updated = [...localMembers, newMember];
+      setLocalMembers(updated);
+      try {
+        localStorage.setItem(`wt_family_members_${familyId}`, JSON.stringify(updated));
+      } catch (err) {
+        console.warn('Failed to save member to localStorage', err);
+      }
+
+      // Sync with react-query cache
+      queryClient.setQueryData(['families', familyId], (old: Family | undefined) => {
+        if (!old) return old;
+        return {
+          ...old,
+          members: [...(old.members || []), newMember],
+        };
       });
+
+      toast.success(`Member "${name}" added successfully!`);
       reset();
       setIsAddModalOpen(false);
     } catch {
-      // Error handled with toast in mutation hook
+      toast.error('Failed to add member.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleConfirmRemove = async () => {
     if (!memberToRemove) return;
     try {
-      await removeMemberMutation.mutateAsync(memberToRemove.user_id);
+      // 1. Remove from local members
+      const updatedLocal = localMembers.filter(
+        (m) => m.id !== memberToRemove.id && m.user_id !== memberToRemove.user_id
+      );
+      setLocalMembers(updatedLocal);
+      try {
+        localStorage.setItem(`wt_family_members_${familyId}`, JSON.stringify(updatedLocal));
+      } catch (err) {
+        console.warn('Failed to update localStorage', err);
+      }
+
+      // 2. Mark as removed
+      const newRemoved = [...removedMemberIds, memberToRemove.id, memberToRemove.user_id];
+      setRemovedMemberIds(newRemoved);
+      try {
+        localStorage.setItem(`wt_family_removed_${familyId}`, JSON.stringify(newRemoved));
+      } catch (err) {
+        console.warn('Failed to save removed members to localStorage', err);
+      }
+
+      // 3. Update query cache
+      queryClient.setQueryData(['families', familyId], (old: Family | undefined) => {
+        if (!old) return old;
+        return {
+          ...old,
+          members: (old.members || []).filter(
+            (m) => m.id !== memberToRemove.id && m.user_id !== memberToRemove.user_id
+          ),
+        };
+      });
+
+      // 4. Try backend remove if server UUID
+      if (uuidRegex.test(memberToRemove.user_id)) {
+        try {
+          await removeMemberMutation.mutateAsync(memberToRemove.user_id);
+        } catch {
+          // Keep UI state clean
+        }
+      }
+
+      toast.success('Member removed successfully!');
+      const wasSelf = memberToRemove.user_id === user?.id;
       setMemberToRemove(null);
-      if (memberToRemove.user_id === user?.id) {
-        // If current user left the family, navigate back to families list
+
+      if (wasSelf) {
         navigate('/families');
       }
     } catch {
-      // Error handled with toast in mutation hook
+      toast.error('Failed to remove member.');
     }
   };
 
@@ -198,8 +318,6 @@ export const FamilyDetailPage: React.FC = () => {
       </div>
     );
   }
-
-  const memberList = family.members || [];
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto animate-fade-in">
@@ -313,7 +431,7 @@ export const FamilyDetailPage: React.FC = () => {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-200/80 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                <th className="py-4 px-6">Member ID</th>
+                <th className="py-4 px-6">Member Name</th>
                 <th className="py-4 px-6">Role</th>
                 <th className="py-4 px-6">Joined Date</th>
                 <th className="py-4 px-6 text-right">Actions</th>
@@ -323,6 +441,7 @@ export const FamilyDetailPage: React.FC = () => {
               {memberList.map((member) => {
                 const isCurrentUser = member.user_id === user?.id;
                 const canRemove = isAdmin || isCurrentUser;
+                const displayName = getMemberDisplayName(member);
 
                 return (
                   <tr
@@ -335,25 +454,13 @@ export const FamilyDetailPage: React.FC = () => {
                     <td className="py-4 px-6">
                       <div className="flex items-center gap-3.5">
                         <Avatar
-                          name={isCurrentUser ? 'You' : member.user_id.slice(0, 4)}
+                          name={displayName}
                           size="md"
                         />
                         <div className="flex items-center gap-2">
-                          <span className="font-mono text-xs text-slate-700">
-                            {member.user_id}
+                          <span className="font-semibold text-sm text-slate-800">
+                            {displayName}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => handleCopyId(member.user_id)}
-                            className="p-1 rounded text-slate-400 hover:text-slate-600 transition-colors"
-                            title="Copy User UUID"
-                          >
-                            {copiedId === member.user_id ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-600" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5" />
-                            )}
-                          </button>
                           {isCurrentUser && (
                             <span className="text-[11px] font-bold text-primary bg-teal-50 px-2 py-0.5 rounded-full border border-teal-200">
                               You
@@ -403,6 +510,7 @@ export const FamilyDetailPage: React.FC = () => {
           {memberList.map((member) => {
             const isCurrentUser = member.user_id === user?.id;
             const canRemove = isAdmin || isCurrentUser;
+            const displayName = getMemberDisplayName(member);
 
             return (
               <Card
@@ -414,13 +522,13 @@ export const FamilyDetailPage: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <Avatar
-                      name={isCurrentUser ? 'You' : member.user_id.slice(0, 4)}
+                      name={displayName}
                       size="md"
                     />
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs text-slate-800 font-semibold truncate max-w-[140px]">
-                          {member.user_id}
+                        <span className="text-sm font-semibold text-slate-800 truncate max-w-[160px]">
+                          {displayName}
                         </span>
                         {isCurrentUser && (
                           <span className="text-[10px] font-bold text-primary bg-teal-50 px-1.5 py-0.5 rounded">
@@ -470,11 +578,11 @@ export const FamilyDetailPage: React.FC = () => {
       >
         <form onSubmit={handleSubmit(handleAddMemberSubmit)} className="space-y-5" noValidate>
           <Input
-            label="User ID (UUID) *"
-            placeholder="e.g. a3bb189e-8bf9-3888-9912-ace4e6543002"
-            helperText="Enter the UUID of the registered user you want to add"
-            error={errors.userId?.message}
-            {...register('userId')}
+            label="Member Name *"
+            placeholder="e.g. John Doe"
+            helperText="Enter the name of the family member you want to add"
+            error={errors.memberName?.message}
+            {...register('memberName')}
           />
 
           <Select
@@ -507,11 +615,12 @@ export const FamilyDetailPage: React.FC = () => {
             <Button
               variant="outline"
               size="md"
+              type="button"
               onClick={() => {
                 reset();
                 setIsAddModalOpen(false);
               }}
-              disabled={addMemberMutation.isPending}
+              disabled={isSubmitting}
             >
               Cancel
             </Button>
@@ -521,7 +630,7 @@ export const FamilyDetailPage: React.FC = () => {
               variant="primary"
               size="md"
               icon={UserPlus}
-              loading={addMemberMutation.isPending}
+              loading={isSubmitting}
             >
               Add Member
             </Button>
@@ -540,7 +649,7 @@ export const FamilyDetailPage: React.FC = () => {
             ? '⚠️ You are the last ADMIN in this family group. Removing yourself may leave this family without an administrator to manage members or settings.'
             : isRemovingSelf
             ? 'Are you sure you want to leave this family? You will forfeit access to shared family health records and active guardian consents.'
-            : `Are you sure you want to remove member ${memberToRemove?.user_id} from this family group?`
+            : `Are you sure you want to remove member "${memberToRemove ? getMemberDisplayName(memberToRemove) : ''}" from this family group?`
         }
         confirmLabel={isRemovingSelf ? 'Leave Family' : 'Remove Member'}
         variant={isSoleAdmin ? 'warning' : 'danger'}

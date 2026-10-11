@@ -43,6 +43,9 @@ export interface FamilyMember {
   role: FamilyRole;
   joined_at: string;
   profile?: UserProfile;
+  name?: string;
+  user_name?: string;
+  member_name?: string;
 }
 
 export interface Family {
@@ -61,7 +64,10 @@ export interface FamilyCreateInput {
 }
 
 export interface FamilyMemberAddInput {
-  user_id: string;
+  user_id?: string;
+  name?: string;
+  user_name?: string;
+  member_name?: string;
   role: FamilyRole;
 }
 
