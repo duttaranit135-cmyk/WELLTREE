@@ -252,10 +252,10 @@ export function getAllFamilyMembers(
     user?.user_metadata?.full_name ||
     user?.email?.split('@')[0] ||
     'Ranit Dutta';
-  const adminUserId = user?.id || 'admin-user';
+  const adminUserId = user?.id || '508645ce-8c5e-4c7c-9b88-51829e598b96';
   const adminMemberId =
     activeFamily?.members?.find((m) => m.user_id === user?.id || m.role === 'ADMIN')?.id ||
-    `mem-${adminUserId}`;
+    adminUserId;
 
   // 1. Add server members from activeFamily
   if (activeFamily?.members && activeFamily.members.length > 0) {

@@ -4,7 +4,10 @@ import type { MedicalReport } from '../../types';
 export const medicalReportService = {
   getReports: async (familyMemberId?: string, reportType?: string): Promise<MedicalReport[]> => {
     const params: Record<string, any> = {};
-    if (familyMemberId) params.family_member_id = familyMemberId;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (familyMemberId && uuidRegex.test(familyMemberId)) {
+      params.family_member_id = familyMemberId;
+    }
     if (reportType) params.report_type = reportType;
     const res = await api.get<MedicalReport[]>('/medical-reports', { params });
     return res.data;
