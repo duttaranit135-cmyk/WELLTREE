@@ -2,16 +2,12 @@ import api from '../api';
 import { supabase } from '../supabase';
 import type { MedicalReport } from '../../types';
 
-const isUUID = (str?: string): boolean =>
-  Boolean(
-    str &&
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str)
-  );
+const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const medicalReportService = {
   getReports: async (familyMemberId?: string, reportType?: string): Promise<MedicalReport[]> => {
     // 1. Direct Supabase Query (~50ms)
-    if (familyMemberId && isUUID(familyMemberId)) {
+    if (familyMemberId && uuidRegex.test(familyMemberId)) {
       try {
         let query = supabase.from('medical_reports').select('*').eq('family_member_id', familyMemberId);
         if (reportType) query = query.eq('report_type', reportType);
@@ -19,67 +15,49 @@ export const medicalReportService = {
         const { data, error } = await query;
         if (!error && data) {
           const withUrls = await Promise.all(
-            data.map(async (r: any) => {
-              try {
-                if (r.storage_path) {
+            (data || []).map(async (r: any) => {
+              if (r.storage_path) {
+                try {
                   const { data: signed } = await supabase.storage
                     .from('medical-reports')
                     .createSignedUrl(r.storage_path, 300);
                   return { ...r, download_url: signed?.signedUrl || r.download_url };
+                } catch {
+                  return r;
                 }
-                return r;
-              } catch {
-                return r;
               }
+              return r;
             })
           );
-          try {
-            const cacheKey = familyMemberId ? `wt_reports_${familyMemberId}` : 'wt_reports_all';
-            localStorage.setItem(cacheKey, JSON.stringify(withUrls));
-          } catch {}
           return withUrls as MedicalReport[];
         }
       } catch {}
     }
 
-    // 2. Try backend API
+    // 2. Backend API fallback
     try {
       const params: Record<string, any> = {};
-      if (isUUID(familyMemberId)) {
+      if (familyMemberId && uuidRegex.test(familyMemberId)) {
         params.family_member_id = familyMemberId;
       }
       if (reportType) params.report_type = reportType;
       const res = await api.get<MedicalReport[]>('/medical-reports', { params });
-      if (Array.isArray(res.data)) {
-        try {
-          const cacheKey = familyMemberId ? `wt_reports_${familyMemberId}` : 'wt_reports_all';
-          localStorage.setItem(cacheKey, JSON.stringify(res.data));
-        } catch {}
-        return res.data;
-      }
-    } catch (backendError) {
-      console.warn('[medicalReportService] Backend /medical-reports failed, falling back:', backendError);
+      return res.data || [];
+    } catch (err) {
+      console.warn('[medicalReportService] getReports backend failed:', err);
+      return [];
     }
-
-    // 3. Cache fallback
-    try {
-      const cacheKey = familyMemberId ? `wt_reports_${familyMemberId}` : 'wt_reports_all';
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        return JSON.parse(cached);
-      }
-    } catch {}
-
-    return [];
   },
 
   getReportById: async (id: string): Promise<MedicalReport> => {
-    if (isUUID(id)) {
+    if (uuidRegex.test(id)) {
       try {
         const { data, error } = await supabase.from('medical_reports').select('*').eq('id', id).maybeSingle();
         if (!error && data) {
           if (data.storage_path) {
-            const { data: signed } = await supabase.storage.from('medical-reports').createSignedUrl(data.storage_path, 300);
+            const { data: signed } = await supabase.storage
+              .from('medical-reports')
+              .createSignedUrl(data.storage_path, 300);
             data.download_url = signed?.signedUrl || data.download_url;
           }
           return data as MedicalReport;
